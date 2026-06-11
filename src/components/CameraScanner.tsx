@@ -11,11 +11,11 @@ export default function CameraScanner({
   useEffect(() => {
     let scanner: Html5QrcodeScanner | null = null;
 
-    // ✅ Delay ensures DOM is mounted
+    // Delay ensures DOM is mounted
     const timeout = setTimeout(() => {
       const element = document.getElementById("reader");
 
-      if (!element) return; // 🛑 prevent crash
+      if (!element) return; // prevent crash
 
       scanner = new Html5QrcodeScanner(
         "reader",
@@ -33,7 +33,7 @@ export default function CameraScanner({
         },
         () => {}
       );
-    }, 300); // ⏱ small delay fixes null issue
+    }, 300); // small delay fixes null issue
 
     return () => {
       clearTimeout(timeout);
