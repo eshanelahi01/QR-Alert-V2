@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I, O, 0, 1 (confusable)
+const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function randomCode(): string {
   let s = "";
@@ -21,39 +19,91 @@ function randomSlug(): string {
   return s;
 }
 
-// ── POST /api/admin/generate-qrs ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// POST
+// ─────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    const { count = 10, base_url } = await req.json();
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return NextResponse.json(
+        {
+          error:
+            "SUPABASE_SERVICE_ROLE_KEY is missing from environment variables.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const body = await req.json();
+
+    const count = Number(body.count ?? 10);
+    const base_url = body.base_url;
 
     if (!base_url) {
       return NextResponse.json(
-        { error: "base_url is required (e.g. https://yourdomain.com)" },
+        {
+          error: "base_url is required",
+        },
         { status: 400 }
       );
     }
 
-    const batchSize = Math.min(Math.max(Number(count) || 10, 1), 200);
+    const batchSize = Math.min(Math.max(count, 1), 200);
+
     const db = supabaseAdmin();
 
-    // Fetch all existing codes to guarantee uniqueness
-    const { data: existing } = await db
+    // Get existing codes
+    const {
+      data: existing,
+      error: existingErr,
+    } = await db
       .from("stickers")
       .select("activation_code, qr_code");
 
-    const usedCodes = new Set((existing || []).map((r: { activation_code: string }) => r.activation_code));
-    const usedSlugs = new Set((existing || []).map((r: { qr_code: string }) => r.qr_code));
+    if (existingErr) {
+      console.error("Fetch existing codes error:", existingErr);
 
-    const rows: { activation_code: string; qr_code: string; status: string; scan_url: string }[] = [];
+      return NextResponse.json(
+        {
+          error: existingErr.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    const usedCodes = new Set(
+      (existing || []).map((r) => r.activation_code)
+    );
+
+    const usedSlugs = new Set(
+      (existing || []).map((r) => r.qr_code)
+    );
+
+    const rows: {
+      activation_code: string;
+      qr_code: string;
+      status: string;
+      scan_url: string;
+    }[] = [];
 
     let attempts = 0;
-    while (rows.length < batchSize && attempts < batchSize * 20) {
+
+    while (
+      rows.length < batchSize &&
+      attempts < batchSize * 50
+    ) {
       attempts++;
+
       const activation_code = randomCode();
       const qr_code = randomSlug();
 
-      if (usedCodes.has(activation_code) || usedSlugs.has(qr_code)) continue;
+      if (
+        usedCodes.has(activation_code) ||
+        usedSlugs.has(qr_code)
+      ) {
+        continue;
+      }
 
       const scan_url = `${base_url.replace(/\/$/, "")}/q/${qr_code}`;
 
@@ -68,58 +118,117 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (rows.length === 0) {
+    if (!rows.length) {
       return NextResponse.json(
-        { error: "Could not generate unique codes. Try again." },
+        {
+          error: "Failed to generate unique QR codes.",
+        },
         { status: 500 }
       );
     }
 
-    // Insert into Supabase (scan_url stored for reference)
-    const insertRows = rows.map(({ activation_code, qr_code, status }) => ({
-      activation_code,
-      qr_code,
-      status,
+    const insertRows = rows.map((row) => ({
+      activation_code: row.activation_code,
+      qr_code: row.qr_code,
+      status: row.status,
     }));
 
-    const { error: insertErr } = await db.from("stickers").insert(insertRows);
+    const {
+      data: inserted,
+      error: insertErr,
+    } = await db
+      .from("stickers")
+      .insert(insertRows)
+      .select();
 
     if (insertErr) {
       console.error("Insert error:", insertErr);
+
       return NextResponse.json(
-        { error: "Database insert failed: " + insertErr.message },
+        {
+          error: insertErr.message,
+          details: insertErr,
+        },
+        { status: 500 }
+      );
+    }
+
+    console.log(
+      `Successfully inserted ${inserted?.length || 0} QR codes`
+    );
+
+    return NextResponse.json({
+      success: true,
+      generated: rows.length,
+      codes: rows,
+    });
+  } catch (err) {
+    console.error("Generate QR error:", err);
+
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error
+            ? err.message
+            : "Unknown server error",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET
+// ─────────────────────────────────────────────────────────────
+
+export async function GET() {
+  try {
+    const db = supabaseAdmin();
+
+    const { data, error } = await db
+      .from("stickers")
+      .select(
+        `
+        id,
+        activation_code,
+        qr_code,
+        status,
+        created_at,
+        activated_at,
+        owner_first_name,
+        plate_number,
+        scan_count
+      `
+      )
+      .order("created_at", {
+        ascending: false,
+      });
+
+    if (error) {
+      console.error("Fetch stickers error:", error);
+
+      return NextResponse.json(
+        {
+          error: error.message,
+        },
         { status: 500 }
       );
     }
 
     return NextResponse.json({
-      success: true,
-      generated: rows.length,
-      codes: rows, // includes activation_code, qr_code, scan_url
+      stickers: data || [],
     });
   } catch (err) {
-    console.error("Generate QRs error:", err);
-    return NextResponse.json({ error: "Server error." }, { status: 500 });
-  }
-}
+    console.error("GET stickers error:", err);
 
-// ── GET /api/admin/generate-qrs — list all stickers ─────────────────────────
-
-export async function GET() {
-  try {
-    const db = supabaseAdmin();
-    const { data, error } = await db
-      .from("stickers")
-      .select(
-        "id, activation_code, qr_code, status, created_at, activated_at, owner_first_name, plate_number, scan_count"
-      )
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
-
-    return NextResponse.json({ stickers: data || [] });
-  } catch (err) {
-    console.error("List stickers error:", err);
-    return NextResponse.json({ error: "Failed to fetch stickers." }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to fetch stickers",
+      },
+      { status: 500 }
+    );
   }
 }
