@@ -1,16 +1,12 @@
-import clientPkg from "@prisma/client";
-
-// Handle environments where @prisma/client may export differently
-const PrismaClientCtor = (clientPkg as any).PrismaClient ?? clientPkg;
-type PrismaClientType = InstanceType<typeof PrismaClientCtor>;
+import { PrismaClient } from "@prisma/client";
 
 const globalForPrisma = global as unknown as {
-  prisma: PrismaClientType;
+  prisma: PrismaClient;
 };
 
 export const prisma =
   globalForPrisma.prisma ||
-  new PrismaClientCtor();
+  new PrismaClient();
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
