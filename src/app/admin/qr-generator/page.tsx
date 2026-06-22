@@ -143,9 +143,20 @@ export default function AdminQrGeneratorPage() {
       showToast(`${data.generated} QR codes created and saved!`, "success");
       fetchStickers();
     } catch (err: unknown) {
-      const msg = axios.isAxiosError(err) ? err.response?.data?.error : null;
-      showToast(msg || "Generation failed.", "error");
-    } finally { setGenerating(false); }
+  console.error("QR Generation Error:", err);
+
+  if (axios.isAxiosError(err)) {
+    console.error("Response:", err.response?.data);
+    console.error("Status:", err.response?.status);
+  }
+
+  const msg = axios.isAxiosError(err)
+    ? err.response?.data?.error
+    : "Generation failed.";
+
+  showToast(msg || "Generation failed.", "error");
+}
+     finally { setGenerating(false); }
   }
 
   // ── Download single PNG ─────────────────────────────────────────────────────
